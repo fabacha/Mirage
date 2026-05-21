@@ -181,44 +181,37 @@ class \
         return
 
     def test_model_once(self, iteration, test_dataloader, is_poisoned=False, model=None, trigger=None, mask=None,
-                        label_swap=0):
-        '''
-        test model
-        :param iteration: current iterations
-        :param test_dataloader:  test dataloader
-        :param is_poisoned: is poison
-        :param trigger: trigger for testing, shape, (channel, height, width)
-        :param mask: trigger mask, shape (channel, height, width)
-        :param label_swap: labels
-        :return: results，acc, loss
-        '''
-        if model is None:
-            model = copy.deepcopy(self.global_model)
-        model.eval()
-        with torch.no_grad():
-            total_loss = 0.
-            total_correct = 0.
-            total_num = 0.
-
-            criterion = nn.CrossEntropyLoss(reduction='sum')
-            for i, batch in enumerate(test_dataloader):
-                if is_poisoned:
-                    # 如果需要测试ASR，则需要对batch进行投毒
-                    sample_indices = ~(batch[1] == label_swap)
-                    samples = batch[0][sample_indices]
-                    labels = batch[1][sample_indices]
-                    batch = poisoned_batch_injection((samples, labels), trigger, mask, is_eval=True,
-                                                     label_swap=label_swap)
-                data, target = batch
-                data, target = data.to(self.params["run_device"]), target.to(self.params["run_device"])
-                output = model(data)
-                loss = criterion(output, target)
-                total_correct += (output.argmax(dim=1) == target).sum().item()
-                total_loss += loss.item()
-                total_num += data.size(0)
-        acc = total_correct / total_num
-        loss = total_loss / total_num
-        return acc, loss
+                    label_swap=0):
+            '''
+            OPTIMIZATION: Accumulate losses as tensors to avoid per-batch CPU↔GPU sync
+            '''
+            if model is None:
+                model = self.global_model  # OPTIMIZATION: Reuse model directly instead of deepcopy
+            model.eval()
+            with torch.no_grad():
+                total_loss_tensor = torch.tensor(0.0, device=self.params["run_device"])
+                total_correct = 0
+                total_num = 0
+        
+                criterion = nn.CrossEntropyLoss(reduction='sum')
+                for i, batch in enumerate(test_dataloader):
+                    if is_poisoned:
+                        sample_indices = ~(batch[1] == label_swap)
+                        samples = batch[0][sample_indices]
+                        labels = batch[1][sample_indices]
+                        batch = poisoned_batch_injection((samples, labels), trigger, mask, is_eval=True,
+                                                         label_swap=label_swap)
+                    data, target = batch
+                    data, target = data.to(self.params["run_device"]), target.to(self.params["run_device"])
+                    output = model(data)
+                    loss = criterion(output, target)
+                    total_loss_tensor += loss  # OPTIMIZATION: Accumulate as tensor
+                    total_correct += (output.argmax(dim=1) == target).sum().item()
+                    total_num += data.size(0)
+            
+            acc = total_correct / total_num
+            loss = total_loss_tensor.item() / total_num  # OPTIMIZATION: Single .item() call at end
+            return acc, loss
 
     def save_model(self, iteration, trigger_set, mask_set):
         trigger_set = copy.deepcopy(trigger_set)
