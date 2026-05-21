@@ -91,30 +91,59 @@ class MSPDataloader():
         from torch.utils.data import Subset
         train_loaders = []
 
-        for pos, indices in tqdm(indices_per_participant.items()):
-            tmp_subset = Subset(self.train_dataset, indices)
-            train_loader = torch.utils.data.DataLoader(
-                tmp_subset,
-                batch_size=self.params["train_batch_size"],
-                shuffle=True,
-                drop_last=True)
-            train_loaders.append(train_loader)
+        # When creating DataLoaders, add optimization parameters:
+    for pos, indices in tqdm(indices_per_participant.items()):
+        tmp_subset = Subset(self.train_dataset, indices)
+        train_loader = torch.utils.data.DataLoader(
+            tmp_subset,
+            batch_size=self.params["train_batch_size"],
+            shuffle=True,
+            drop_last=True,
+            num_workers=4,  # OPTIMIZATION: Enable parallel data loading
+            pin_memory=True,  # OPTIMIZATION: Pin memory for GPU transfer
+            persistent_workers=True)  # OPTIMIZATION: Keep workers alive
+        train_loaders.append(train_loader)
 
-        self.train_dataloader = train_loaders
+    self.train_dataloader = train_loaders
 
-        self.test_dataloader = torch.utils.data.DataLoader(
-            self.test_dataset,
-            batch_size=self.params["test_batch_size"],
-            shuffle=False, drop_last=True)
+    self.test_dataloader = torch.utils.data.DataLoader(
+        self.test_dataset,
+        batch_size=self.params["test_batch_size"],
+        shuffle=False, 
+        drop_last=True,
+        num_workers=4,  # OPTIMIZATION
+        pin_memory=True,  # OPTIMIZATION
+        persistent_workers=True)  # OPTIMIZATION
+
+    # def sample_dirichlet_train_data(self, no_participants, alpha=0.9):
+    #     cifar_classes = {}
+    #     for ind, x in enumerate(self.train_dataset):
+    #         _, label = x
+    #         if label in cifar_classes:
+    #             cifar_classes[label].append(ind)
+    #         else:
+    #             cifar_classes[label] = [ind]
 
     def sample_dirichlet_train_data(self, no_participants, alpha=0.9):
+        # OPTIMIZATION: Use dataset.targets instead of enumerating for CIFAR datasets
         cifar_classes = {}
-        for ind, x in enumerate(self.train_dataset):
-            _, label = x
-            if label in cifar_classes:
-                cifar_classes[label].append(ind)
-            else:
-                cifar_classes[label] = [ind]
+        
+        # Direct access to targets if available (CIFAR10, CIFAR100, MNIST, EMNIST)
+        if hasattr(self.train_dataset, 'targets'):
+            targets = self.train_dataset.targets
+            for ind, label in enumerate(targets):
+                if label in cifar_classes:
+                    cifar_classes[label].append(ind)
+                else:
+                    cifar_classes[label] = [ind]
+        else:
+            # Fallback for datasets without .targets attribute
+            for ind, x in enumerate(self.train_dataset):
+                _, label = x
+                if label in cifar_classes:
+                    cifar_classes[label].append(ind)
+                else:
+                    cifar_classes[label] = [ind]        
         class_size = len(cifar_classes[0])
         per_participant_list = defaultdict(list)
         no_classes = len(cifar_classes.keys())
