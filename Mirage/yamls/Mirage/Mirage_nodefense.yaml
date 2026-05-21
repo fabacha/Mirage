@@ -1,6 +1,6 @@
 # vanilla attack with pixel block trigger no defense yaml
 
-resumed_model: saved_models/ResNet_18_cifar10_ptm_2000_benign.pt
+resumed_model: saved_models/ResNet18_cifar10_ptm_2000_benign.pt
 data_dir:   /home/miles/data
 load_data_from_pkl: False
 pre_cache_data_path: data/pre_cached_data.pt.tar
