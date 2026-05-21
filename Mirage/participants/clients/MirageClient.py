@@ -125,8 +125,8 @@ class MirageClient(BasicClient):
                 outputs = discriminator_(inputs)
                 loss = discriminator_criterion(outputs, labels)
                 discriminator_optimizer.zero_grad()
-                # OPTIMIZATION: Remove retain_graph=True (not needed for single backward)
-                loss.backward()
+                # IMPORTANT: Keep retain_graph=True as the graph needs to persist for multiple backward passes
+                loss.backward(retain_graph=True)
                 total_loss += loss.item()
                 discriminator_optimizer.step()
         discriminator_.eval()
