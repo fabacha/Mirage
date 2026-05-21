@@ -102,21 +102,21 @@ class MirageClient(BasicClient):
                 torch.nn.ReLU(),
                 torch.nn.Linear(10, 2)
             )
-
+    
         for name, param in discriminator_.named_parameters():
             if self.classifier_name not in name:
                 param.requires_grad = False
             else:
                 param.requires_grad = True
-
+    
         discriminator_optimizer = torch.optim.SGD(discriminator_.parameters(), lr=self.params["discriminator_lr"],
                                                   momentum=self.params['discriminator_momentum'],
                                                   weight_decay=self.params['discriminator_weight_decay'])
-
+    
         discriminator_criterion = nn.CrossEntropyLoss().to(self.params["run_device"])
-
+    
         discriminator_ = discriminator_.to(self.params["run_device"])
-
+    
         for iter in range(self.params["discriminator_train_no_times"]):
             total_loss = 0.
             for batch in discriminator_dataloader:
@@ -125,35 +125,31 @@ class MirageClient(BasicClient):
                 outputs = discriminator_(inputs)
                 loss = discriminator_criterion(outputs, labels)
                 discriminator_optimizer.zero_grad()
-                loss.backward(retain_graph=True)
+                # OPTIMIZATION: Remove retain_graph=True (not needed for single backward)
+                loss.backward()
                 total_loss += loss.item()
                 discriminator_optimizer.step()
         discriminator_.eval()
-
+    
         return discriminator_
-
+        
     def search_trigger(self, model, train_loader, client_id, test_loader=None):
         '''
         optimize trigger
-
-        :param model:
-        :param train_loader:
-        :param client_id:
-        :return:
+        OPTIMIZATION: Remove unnecessary deepcopy of train_loader and feature_extractor
         '''
         model.eval()
-        local_train_loader = copy.deepcopy(train_loader)
         trigger_ = copy.deepcopy(self.trigger_set[client_id])
         mask_ = copy.deepcopy(self.mask_set[client_id])
         ce_loss = nn.functional.cross_entropy
         cos_loss = nn.CosineSimilarity(dim = 1,  eps=1e-08)
-
-        feature_extractor = copy.deepcopy(model)
-        feature_extractor.linear = torch.nn.Sequential()
-
+    
+        # OPTIMIZATION: Removed unnecessary feature_extractor = copy.deepcopy(model)
+    
         t = copy.deepcopy(trigger_)
         for iters in tqdm(range(self.params["trigger_search_no_times"])):
-            dataloader_discriminator = self.generate_discriminator_dataloader(model, local_train_loader, t, mask_,
+            # OPTIMIZATION: Use train_loader directly instead of local_train_loader = copy.deepcopy(train_loader)
+            dataloader_discriminator = self.generate_discriminator_dataloader(model, train_loader, t, mask_,
                                                                               client_id)
             total_loss = 0.
             trigger_optim = torch.optim.Adam([t], lr=self.params["trigger_lr"], weight_decay=5e-4)
@@ -161,36 +157,34 @@ class MirageClient(BasicClient):
             loss_adv = 0.
             loss_acc = 0.
             model_discriminator = self.get_discriminator(model, dataloader_discriminator)
-
-            for inputs, targets in train_loader:  # 在训练集上更新样本
+    
+            for inputs, targets in train_loader:
                 t.requires_grad_()
                 inputs, targets = inputs.to(self.params["run_device"]), targets.to(self.params["run_device"])
                 batch_clean_indices = targets == self.params["poison_label_swap"][client_id]
                 if batch_clean_indices.sum() == 0:
                     continue
                 counter += 1
-
+    
                 batch_backdoor_indices = ~batch_clean_indices
                 backdoor_inputs = inputs[batch_backdoor_indices]
                 backdoor_targets = targets[batch_backdoor_indices]
-
+    
                 backdoor_inputs, backdoor_targets = poisoned_batch_injection((backdoor_inputs, backdoor_targets),
                                                                              trigger=t, mask=mask_, is_eval=False,
                                                                              label_swap=
                                                                              self.params["poison_label_swap"][
                                                                                  client_id])
-
+    
                 backdoor_inputs = backdoor_inputs.to(self.params["run_device"])
-
-                # TODO 1 -> to ID,
+    
                 backdoor_pred_disc = model_discriminator(backdoor_inputs)
                 loss_discriminator = ce_loss(backdoor_pred_disc,
                                              torch.zeros(len(backdoor_pred_disc), device=self.params["run_device"]).long())
                 backdoor_pred = model(backdoor_inputs)
-                # TODO 2 -> enhancement
                 loss_asr = ce_loss(backdoor_pred, backdoor_targets)
                 loss_sim = cos_loss(backdoor_pred, model(inputs[batch_backdoor_indices])).mean()
-
+    
                 loss = 0.
                 loss += loss_discriminator
                 loss += loss_asr
@@ -198,7 +192,8 @@ class MirageClient(BasicClient):
                 total_loss += loss.item()
                 if loss != None and loss.item() != 0.:
                     trigger_optim.zero_grad()
-                    loss.backward(retain_graph=True)
+                    # OPTIMIZATION: Remove retain_graph=True when not needed
+                    loss.backward()
                     new_t = t - t.grad.sign() * self.params["trigger_lr"]
                     t = new_t.detach()
                     t = torch.clamp(t, min=-2, max=2)
