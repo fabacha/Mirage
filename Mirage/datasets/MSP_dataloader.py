@@ -32,7 +32,6 @@ class MSPDataloader():
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-
         transform_test = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
@@ -42,6 +41,7 @@ class MSPDataloader():
             transforms.RandomCrop(32, padding=4),
             transforms.ToTensor()
         ])
+        
         transform_grstb = transforms.Compose([
             transforms.Resize((32, 32)),
             transforms.RandomHorizontalFlip(),
@@ -49,6 +49,7 @@ class MSPDataloader():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
+        
         transform_grstb_test = transforms.Compose([
             transforms.Resize((32, 32)),
             transforms.ToTensor(),
@@ -66,70 +67,58 @@ class MSPDataloader():
                                                    transform=transform_train)
             self.test_dataset = datasets.CIFAR100(f"{self.params['data_dir']}", train=False, download=True,
                                                   transform=transform_test)
+        
         elif self.params["dataset"].upper() == "GTSRB":
-            # self.train_dataset = datasets.EMNIST(f"{self.params['data_dir']}", train=True, split="mnist", download=True,
-            #                                      transform=transform_emnist)
-            # self.test_dataset = datasets.EMNIST(f"{self.params['data_dir']}", train=False, split="mnist", transform=transform_emnist)
             self.train_dataset = datasets.GTSRB(f"{self.params['data_dir']}", split="train", download=True,
                                                 transform=transform_grstb)
             self.train_dataset = [sample for sample in self.train_dataset] * 3
             self.test_dataset = datasets.GTSRB(f"{self.params['data_dir']}", split="test", download=True,
                                                transform=transform_grstb_test)
 
-
         elif self.params["dataset"].upper() == "EMNIST":
-            # self.train_dataset = datasets.EMNIST(f"{self.params['data_dir']}", train=True, split="mnist", download=True,
-            #                                      transform=transform_emnist)
-            # self.test_dataset = datasets.EMNIST(f"{self.params['data_dir']}", train=False, split="mnist", transform=transform_emnist)
             self.train_dataset = datasets.MNIST(f"{self.params['data_dir']}", train=True, download=True,
                                                 transform=transform_emnist)
             self.test_dataset = datasets.MNIST(f"{self.params['data_dir']}", train=False, transform=transform_emnist)
 
+        # Compute indices per participant based on Dirichlet distribution
         indices_per_participant = self.sample_dirichlet_train_data(
             self.params['no_of_total_participants'],
             alpha=self.params['dirichlet_alpha'])
+        
         from torch.utils.data import Subset
         train_loaders = []
 
-        # When creating DataLoaders, add optimization parameters:
-    for pos, indices in tqdm(indices_per_participant.items()):
-        tmp_subset = Subset(self.train_dataset, indices)
-        train_loader = torch.utils.data.DataLoader(
-            tmp_subset,
-            batch_size=self.params["train_batch_size"],
-            shuffle=True,
+        # OPTIMIZATION: Enable num_workers, pin_memory, and persistent_workers
+        for pos, indices in tqdm(indices_per_participant.items()):
+            tmp_subset = Subset(self.train_dataset, indices)
+            train_loader = torch.utils.data.DataLoader(
+                tmp_subset,
+                batch_size=self.params["train_batch_size"],
+                shuffle=True,
+                drop_last=True,
+                num_workers=4,  # Enable parallel data loading
+                pin_memory=True,  # Pin memory for GPU transfer
+                persistent_workers=True)  # Keep workers alive
+            train_loaders.append(train_loader)
+
+        self.train_dataloader = train_loaders
+
+        self.test_dataloader = torch.utils.data.DataLoader(
+            self.test_dataset,
+            batch_size=self.params["test_batch_size"],
+            shuffle=False, 
             drop_last=True,
-            num_workers=4,  # OPTIMIZATION: Enable parallel data loading
-            pin_memory=True,  # OPTIMIZATION: Pin memory for GPU transfer
-            persistent_workers=True)  # OPTIMIZATION: Keep workers alive
-        train_loaders.append(train_loader)
-
-    self.train_dataloader = train_loaders
-
-    self.test_dataloader = torch.utils.data.DataLoader(
-        self.test_dataset,
-        batch_size=self.params["test_batch_size"],
-        shuffle=False, 
-        drop_last=True,
-        num_workers=4,  # OPTIMIZATION
-        pin_memory=True,  # OPTIMIZATION
-        persistent_workers=True)  # OPTIMIZATION
-
-    # def sample_dirichlet_train_data(self, no_participants, alpha=0.9):
-    #     cifar_classes = {}
-    #     for ind, x in enumerate(self.train_dataset):
-    #         _, label = x
-    #         if label in cifar_classes:
-    #             cifar_classes[label].append(ind)
-    #         else:
-    #             cifar_classes[label] = [ind]
+            num_workers=4,  # Enable parallel data loading
+            pin_memory=True,  # Pin memory for GPU transfer
+            persistent_workers=True)  # Keep workers alive
 
     def sample_dirichlet_train_data(self, no_participants, alpha=0.9):
-        # OPTIMIZATION: Use dataset.targets instead of enumerating for CIFAR datasets
         cifar_classes = {}
         
-        # Direct access to targets if available (CIFAR10, CIFAR100, MNIST, EMNIST)
+        # OPTIMIZATION: Use dataset.targets for fast label access
+        # Avoids re-running PIL+transform on 50k images
         if hasattr(self.train_dataset, 'targets'):
+            # Fast path: CIFAR10, CIFAR100, MNIST
             targets = self.train_dataset.targets
             for ind, label in enumerate(targets):
                 if label in cifar_classes:
@@ -137,13 +126,14 @@ class MSPDataloader():
                 else:
                     cifar_classes[label] = [ind]
         else:
-            # Fallback for datasets without .targets attribute
+            # Fallback: GTSRB or custom datasets
             for ind, x in enumerate(self.train_dataset):
                 _, label = x
                 if label in cifar_classes:
                     cifar_classes[label].append(ind)
                 else:
-                    cifar_classes[label] = [ind]        
+                    cifar_classes[label] = [ind]
+        
         class_size = len(cifar_classes[0])
         per_participant_list = defaultdict(list)
         no_classes = len(cifar_classes.keys())
