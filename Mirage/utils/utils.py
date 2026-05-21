@@ -121,20 +121,33 @@ def update_weight_accumulator(model, global_model, weight_accumulator, weight = 
     '''
     计算模型更新的梯度，并累加到weight_accumulator中
 
-
-    :param model:
-    :param global_model:
-    :param weight_accumulator:
+    :param model: Updated model (can be a model object)
+    :param global_model: Global model state_dict or model object
+    :param weight_accumulator: Accumulator dict to update
     :return: weight_accumulator (当前权重累加), single_weight_accumulator (当前模型更新)
     '''
     single_weight_accumulator = dict()
-    for name, data in model.state_dict().items():
-        single_weight_accumulator[name] = data - global_model.state_dict()[name]
+    
+    # Get state_dict from model if needed
+    if isinstance(model, dict):
+        model_state = model
+    else:
+        model_state = model.state_dict()
+    
+    # Get state_dict from global_model - handle both model objects and dicts
+    if isinstance(global_model, dict):
+        global_state = global_model
+    else:
+        global_state = global_model.state_dict()
+    
+    for name, data in model_state.items():
+        single_weight_accumulator[name] = data - global_state[name]
         try:
-            weight_accumulator[name].add_((data - global_model.state_dict()[name]) * weight)
+            weight_accumulator[name].add_((data - global_state[name]) * weight)
         except RuntimeError as e:
             if single_weight_accumulator[name].dtype == torch.int64:
-                weight_accumulator[name].add_((data - global_model.state_dict()[name]))
+                weight_accumulator[name].add_((data - global_state[name]))
+    
     return weight_accumulator, single_weight_accumulator
 
 
