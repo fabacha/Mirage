@@ -59,7 +59,7 @@ dirichlet_alpha: 1
 
 train_batch_size: 64
 test_batch_size: 1000
-no_of_total_participants: 100
+no_of_total_participants: 10
 no_of_participants_per_iteration: 10
 
 
