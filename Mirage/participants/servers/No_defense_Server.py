@@ -32,7 +32,7 @@ class No_defense_Server(BasicServer):
         global_model_copy = self.create_global_model_copy()
         # OPTIMIZATION: Store state_dict reference instead of deepcopy
         global_model_state = self.global_model.state_dict()
-        
+    
         aggregated_model_id = [1] * self.params["no_of_participants_per_iteration"]
         for client_id in tqdm(selected_clients_list):
             if client_id in malicious_clients_list:
@@ -52,13 +52,11 @@ class No_defense_Server(BasicServer):
     
             update_norm_list.append(round(update_norm.item(), 6))
     
-            # OPTIMIZATION: Pass state_dict reference by reference instead of deepcopy
-            weight_accumulator, single_wa = update_weight_accumulator(updated_model, global_model_state,
-                                                                      weight_accumulator)
+            # FIXED: Use global_model_state[name] directly instead of trying to call .state_dict() on it
+            weight_accumulator, single_wa = update_weight_accumulator(updated_model, global_model_state, weight_accumulator)
             weight_accumulator_by_client.append(single_wa)
             del local_model
     
         for client_ind, client_id in enumerate(selected_clients_list):
             logger.info(f"Client {client_id} update norm: {update_norm_list[client_ind]}")
         return weight_accumulator, weight_accumulator_by_client, aggregated_model_id
-    
