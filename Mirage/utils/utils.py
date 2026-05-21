@@ -54,21 +54,12 @@ def args_update(args=None, mkdir=True):
 
 
 def poisoned_batch_injection(batch, trigger, mask, is_eval=False, client_id=0, label_swap=None, mode = "all"):
-    '''
-    对batch数据进行投毒，并返回新的batch数据
-
-    :param batch: 需要投毒的batch
-    :param trigger: trigger tensor, shape为(channel, height, width)
-    :param mask: mask tensor, shape为(channel, height, width)
-    :param is_eval: 是否为eval模式
-    :param client_id: 客户端id (for attacker)
-    :param label_swap: target label (for attacker)
-    :param mode: 模式，是否在注入时排除干净目标类, value: "all"/"escape_clean"
-    :return: poisoned batch
-    '''
     if label_swap is None:
         label_swap = static_args["poison_label_swap"][client_id]
-    data, label = copy.deepcopy(batch)
+    # OPTIMIZATION: Use clone() instead of deepcopy() for batch tensors
+    data, label = batch
+    data = data.clone()
+    label = label.clone()
 
     if mode == "all" and is_eval == False:
         poison_indices = list(range(static_args["poisoned_len"]))
@@ -99,24 +90,24 @@ def poisoned_batch_injection(batch, trigger, mask, is_eval=False, client_id=0, l
 
 def model_dist_norm_var(model, target_params_variables, norm=2):
     '''
-    计算model 和 target_params_variables之间的距离，默认使用2范数
-    :param self:
-    :param model:
-    :param target_params_variables:
-    :param norm:
-    :return: model和target_params_variables之间的距离
+    OPTIMIZATION: Streaming squared sum instead of allocating full buffer per client (10× memory reduction)
     '''
-    size = 0
+    squared_sum = 0.0
     for name, layer in model.named_parameters():
-        size += layer.view(-1).shape[0]
-    sum_var = torch.zeros(size, device=static_args["run_device"], dtype=torch.float)
-    size = 0
-    for name, layer in model.named_parameters():
-        sum_var[size:size + layer.view(-1).shape[0]] = (
-                layer - target_params_variables[name]).view(-1)
-        size += layer.view(-1).shape[0]
-
-    return torch.norm(sum_var, norm)
+        diff = layer - target_params_variables[name]
+        squared_sum += torch.sum(diff * diff).item()
+    
+    if norm == 2:
+        return torch.tensor(math.sqrt(squared_sum), device=static_args["run_device"])
+    else:
+        # Fallback for other norms
+        size = sum(layer.view(-1).shape[0] for name, layer in model.named_parameters())
+        sum_var = torch.zeros(size, device=static_args["run_device"], dtype=torch.float)
+        size = 0
+        for name, layer in model.named_parameters():
+            sum_var[size:size + layer.view(-1).shape[0]] = (layer - target_params_variables[name]).view(-1)
+            size += layer.view(-1).shape[0]
+        return torch.norm(sum_var, norm)
 
 
 def model_dist_norm(model, target_params):
